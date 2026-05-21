@@ -1,0 +1,11 @@
+{
+    "makefile.configureOnOpen": false,
+    "files.exclude": {
+        "*.vo": true,
+        "*.vok": true,
+        "*.vos": true,
+        "*.glob": true,
+        ".lia.cache": true,
+        "*.aux": true,
+    },
+}
