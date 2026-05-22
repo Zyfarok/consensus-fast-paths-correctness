@@ -3,7 +3,7 @@
 ROCQC=rocq compile
 
 rocq:
-	$(ROCQC) Project.v
+	$(ROCQC) AdoptCommit.v
 
 clean:
 	rm -f *.vo* .*.aux *.cache *.glob

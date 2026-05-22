@@ -7,7 +7,7 @@
     Abortable linearizable modules in Isabelle/HOL,
     available on the Archive of Formal Proofs website:
     https://isa-afp.org/browser_info/current/AFP/Abortable_Linearizable_Modules/
-    (Which itself is part of larger work on Speculative linearizability, 
+    (Which itself is part of larger work on Speculative linearizability,
     published at PLDI 2012: https://dl.acm.org/doi/abs/10.1145/2345156.2254072)
 
     We adopt a similar reachability-based approach to defining safety properties,
@@ -38,7 +38,7 @@ Inductive ACOutput :=
    be instantiated by the concrete adopt-commit protocol.
    ================================================================ *)
 
-Section AdoptCommit.
+Section AC.
 
 (** Number of processes; IDs 0 .. n-1 are valid. *)
 Variable n : nat.
@@ -52,14 +52,6 @@ Definition valid_pid (p : ProcessId) : Prop := p < n.
 
 Variable Msg        : Type.
 Variable LocalState : Type.
-
-(** Extract the adopt-commit decision of a process, if it has terminated. *)
-Variable proc_output : LocalState -> option ACOutput.
-
-(** Which processes have a value to propose;
-  non-proposers simply participate to help others, rooting for the first proposal they see. *)
-Variable is_proposer : ProcessId -> Prop.
-Hypothesis exists_proposer : exists p, valid_pid p /\ is_proposer p.
 
 (** Global state: per-process local state + per-(src, dst) FIFO message queues.
     [network s src dst] is the queue of messages sent by src to dst,
@@ -75,48 +67,55 @@ Definition state_eq (s s' : GlobalState) : Prop :=
   (forall q, local s' q = local s q) /\
   (forall q_src q_dst, network s' q_src q_dst = network s q_src q_dst).
 
+(** A protocol instance bundles the four protocol-specific parameters:
+    how to extract a decision, which processes are proposers, the initial
+    state predicate, and the pure local transition function. *)
+Record ACProtocol := mkACProtocol {
+  acp_proc_output : LocalState -> option ACOutput;
+  acp_is_proposer : ProcessId -> Prop;
+  acp_init        : GlobalState -> Prop;
+  acp_step_fn     : ProcessId -> LocalState -> Msg ->
+                    LocalState * (ProcessId -> list Msg);
+}.
+
+Variable P : ACProtocol.
+
+Hypothesis exists_proposer :
+  exists p, valid_pid p /\ acp_is_proposer P p.
+
+(** acp_step_fn never discards an existing output decision. *)
+Hypothesis step_fn_output_stable :
+  forall p ls m o,
+    acp_proc_output P ls = Some o ->
+    acp_proc_output P (fst (acp_step_fn P p ls m)) = Some o.
 
 (** Shorthand: output of process p in state s. *)
 Definition output_of (s : GlobalState) (p : ProcessId) : option ACOutput :=
-  proc_output (local s p).
-
-(** Set of valid initial states *)
-Variable init : GlobalState -> Prop.
-
-(** Pure local transition function: given p's id, p's current local state, and
-    the received message, returns p's new local state and the messages to append
-    to each outgoing queue (indexed by destination). *)
-Variable step_fn : ProcessId -> LocalState -> Msg -> LocalState * (ProcessId -> list Msg).
-
-(** step_fn never discards an existing output decision. *)
-Hypothesis step_fn_output_stable :
-  forall p ls m o,
-    proc_output ls = Some o ->
-    proc_output (fst (step_fn p ls m)) = Some o.
+  acp_proc_output P (local s p).
 
 (** [step p src s s'] holds when src != p and s' is the state obtained after
     p processes the next message from src.
     - If the queue is empty the step is a no-op (s' = s componentwise).
-    - Otherwise p's local state is updated by step_fn; the consumed slot
+    - Otherwise p's local state is updated by acp_step_fn; the consumed slot
       (src->p) loses its head; p's outgoing queues grow by the messages
-      prescribed by step_fn; all other queues are unchanged. *)
+      prescribed by acp_step_fn; all other queues are unchanged. *)
 Definition step (p src : ProcessId) (s s' : GlobalState) : Prop :=
   src <> p /\
   match network s src p with
   | [] => state_eq s s'
   | m :: rest =>
-      local s' p = fst (step_fn p (local s p) m) /\
-      (forall q, q <> p -> local s' q = local s q) /\
+      (local s' p = fst (acp_step_fn P p (local s p) m) /\
+      (forall q, q <> p -> local s' q = local s q)) /\
       network s' src p = rest /\
-      (forall dst, network s' p dst = network s p dst ++ snd (step_fn p (local s p) m) dst) /\
+      (forall dst, network s' p dst = network s p dst ++ snd (acp_step_fn P p (local s p) m) dst) /\
       (forall other_src other_dst,
-        other_src <> p -> ~ (other_dst = p /\ other_src = src) ->
+        other_src <> p -> (other_dst <> p \/ other_src <> src) ->
         network s' other_src other_dst = network s other_src other_dst)
   end.
 
 (** The set of reachable global states. *)
 Inductive Reachable : GlobalState -> Prop :=
-  | Reach_init : forall s, init s -> Reachable s
+  | Reach_init : forall s, acp_init P s -> Reachable s
   | Reach_step : forall p src s s',
       Reachable s -> step p src s s' -> Reachable s'.
 
@@ -130,7 +129,7 @@ Definition Validity : Prop :=
     Reachable s ->
     valid_pid p ->
     (output_of s p = Some (Commit v) \/ output_of s p = Some (Adopt v)) ->
-    is_proposer v.
+    acp_is_proposer P v.
 
 (** Agreement: if process p commits v, every terminating process q outputs v
     (whether committing or adopting). *)
@@ -148,8 +147,8 @@ Definition Convergence : Prop :=
   forall s p q o,
     Reachable s ->
     valid_pid p -> valid_pid q ->
-    is_proposer p ->
-    (forall p', is_proposer p' -> p' = p) ->
+    acp_is_proposer P p ->
+    (forall p', acp_is_proposer P p' -> p' = p) ->
     output_of s q = Some o ->
     o = Commit p.
 
@@ -170,4 +169,18 @@ Definition Recoverability : Prop :=
     (exists q, output_of s' q = Some (Commit w)) ->
     v = w.
 
-End AdoptCommit.
+End AC.
+
+Arguments local           {Msg LocalState}.
+Arguments network         {Msg LocalState}.
+Arguments ACProtocol      {Msg LocalState}.
+Arguments mkACProtocol    {Msg LocalState}.
+Arguments acp_proc_output {Msg LocalState}.
+Arguments acp_is_proposer {Msg LocalState}.
+Arguments acp_init        {Msg LocalState}.
+Arguments acp_step_fn     {Msg LocalState}.
+Arguments Reachable       {Msg LocalState}.
+Arguments Validity        n {Msg LocalState}.
+Arguments Agreement       n {Msg LocalState}.
+Arguments Convergence     n {Msg LocalState}.
+Arguments Recoverability  n f {Msg LocalState}.
