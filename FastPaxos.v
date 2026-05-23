@@ -121,7 +121,7 @@ Definition fp_instance : ACProtocol :=
    ================================================================ *)
 
 Definition FP_GlobalState := GlobalState FPMsg FPState.
-Definition FP_Reachable   := Reachable fp_instance.
+Definition FP_Reachable   := Reachable n fp_instance.
 
 (* ================================================================
    Proofs
@@ -137,7 +137,7 @@ Proof.
   unfold fp_step_fn. rewrite H. simpl. exact H.
 Qed.
 
-Lemma all_message_values_vaid :
+Lemma all_message_values_valid :
   forall s,
     FP_Reachable s ->
     (forall src dest,
@@ -151,7 +151,7 @@ Proof.
       * rewrite (init_net_prop src dest src_valid dest_valid Hneq Hprop). constructor; auto.
     + rewrite (init_net_nonprop src dest src_valid dest_valid Hprop). constructor; auto.
   - intros src0 dest. unfold step, fp_instance in H; simpl in H.
-    destruct H as [p_not_src H]. destruct (network s src p) eqn:src_net.
+    destruct H as [[p_not_src [src_valid p_valid]] H]. destruct (network s src p) eqn:src_net.
     + unfold state_eq in H. destruct H as [state_eq net_eq].
       rewrite net_eq. auto.
     + destruct H as [_ [H_net_p_in [H_net_p_out H_net_other]]].
@@ -175,8 +175,13 @@ Proof.
             ** destruct (proposer f0 =? p0); simpl; auto.
             ** simpl. destruct (dest =? proposer f0); auto.
               rewrite Forall_cons_iff; split; auto.
-              (* TODO: continue. We need to show that the step's msg contains a valid proposer. *)
-Admitted.
+              simpl.
+              pose (IHHs src p src_valid p_valid) as Hmsg.
+              rewrite src_net in Hmsg.
+              apply Forall_inv in Hmsg.
+              apply Hmsg.
+        -- rewrite H_net_other; auto.
+Qed.
 
 Lemma all_values_valid :
   forall s,

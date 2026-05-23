@@ -100,7 +100,7 @@ Definition output_of (s : GlobalState) (p : ProcessId) : option ACOutput :=
       (src->p) loses its head; p's outgoing queues grow by the messages
       prescribed by acp_step_fn; all other queues are unchanged. *)
 Definition step (p src : ProcessId) (s s' : GlobalState) : Prop :=
-  src <> p /\
+  (src <> p /\ src < n /\ p < n) /\
   match network s src p with
   | [] => state_eq s s'
   | m :: rest =>
@@ -179,7 +179,7 @@ Arguments acp_proc_output {Msg LocalState}.
 Arguments acp_is_proposer {Msg LocalState}.
 Arguments acp_init        {Msg LocalState}.
 Arguments acp_step_fn     {Msg LocalState}.
-Arguments Reachable       {Msg LocalState}.
+Arguments Reachable       n {Msg LocalState}.
 Arguments Validity        n {Msg LocalState}.
 Arguments Agreement       n {Msg LocalState}.
 Arguments Convergence     n {Msg LocalState}.
