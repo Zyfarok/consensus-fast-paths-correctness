@@ -144,68 +144,153 @@ Lemma all_message_values_valid :
       src < n -> dest < n -> Forall (fun msg => is_proposer (proposer msg)) (network s src dest)).
 Proof.
   intros s Hs. induction Hs; simpl in H.
-  - unfold fp_init in H; destruct H as [_ [[init_net_prop init_net_nonprop] init_net_self]].
+  - (* init-case: only proposers have sent messages with their own value. *)
+    unfold fp_init in H; destruct H as [_ [[init_net_prop init_net_nonprop] init_net_self]].
     intros src dest src_valid dest_valid. destruct (classic (is_proposer src)) as [Hprop | Hprop].
     + destruct (classic (src = dest)) as [Heq | Hneq].
-      * destruct Heq. rewrite (init_net_self src src_valid). constructor.
-      * rewrite (init_net_prop src dest src_valid dest_valid Hneq Hprop). constructor; auto.
-    + rewrite (init_net_nonprop src dest src_valid dest_valid Hprop). constructor; auto.
-  - intros src0 dest. unfold step, fp_instance in H; simpl in H.
+      * (* no messages are sent to self *)
+        destruct Heq. rewrite (init_net_self src src_valid). constructor.
+      * (* proposer sending to others *)
+        rewrite (init_net_prop src dest src_valid dest_valid Hneq Hprop). constructor; auto.
+    + (* non-proposers send nothing initially *)
+      rewrite (init_net_nonprop src dest src_valid dest_valid Hprop). constructor; auto.
+  - (* step-case: try to dequeue a message and potentially send new ones *)
+    intros src0 dest. unfold step, fp_instance in H; simpl in H.
     destruct H as [[p_not_src [src_valid p_valid]] H]. destruct (network s src p) eqn:src_net.
-    + unfold state_eq in H. destruct H as [state_eq net_eq].
+    + (* empty queue: nothing was done. *)
+      unfold state_eq in H. destruct H as [state_eq net_eq].
       rewrite net_eq. auto.
     + destruct H as [_ [H_net_p_in [H_net_p_out H_net_other]]].
       intros src0_valid dest_valid.
       destruct (classic (src = src0)).
       * destruct H. destruct (classic (dest = p)).
-        -- destruct H.
+        -- (* Queue from which p consumed the message. *)
+          destruct H.
           pose (IHHs src dest src0_valid dest_valid) as H.
           rewrite src_net in H.
           apply Forall_inv_tail in H.
           destruct H_net_p_in. auto.
-        -- rewrite H_net_other; auto.
+        -- (* Other queues from the same source: unchanged. *)
+          rewrite H_net_other; auto.
       * destruct (classic (p = src0)).
-        -- destruct H0.
+        -- (* p's outgoing queues: gained the replies from fp_step_fn. *)
+          destruct H0.
           rewrite H_net_p_out.
           apply Forall_app. split.
-          ++ auto.
-          ++ unfold fp_step_fn.
-            destruct (fp_output (local s p)); auto.
+          ++ (* Pre-existing messages: valid by IHHs. *)
+            auto.
+          ++ (* New messages emitted by fp_step_fn: *)
+            unfold fp_step_fn.
+            destruct (fp_output (local s p)); auto. (* output already set: no new messages *)
             destruct (fp_accepted (local s p)).
-            ** destruct (proposer f0 =? p0); simpl; auto.
-            ** simpl. destruct (dest =? proposer f0); auto.
+            ** (* Already accepted: no new messages (or sends nothing new). *)
+              destruct (proposer f0 =? p0); simpl; auto.
+            ** (* Not yet accepted: sends replies to proposer (with same value). *)
+              simpl. destruct (dest =? proposer f0); auto.
               rewrite Forall_cons_iff; split; auto.
               simpl.
               pose (IHHs src p src_valid p_valid) as Hmsg.
               rewrite src_net in Hmsg.
               apply Forall_inv in Hmsg.
               apply Hmsg.
-        -- rewrite H_net_other; auto.
+        -- (* All the other queues: unchanged. *)
+          rewrite H_net_other; auto.
 Qed.
 
-Lemma all_values_valid :
+Lemma all_accepted_values_valid :
   forall s,
-    FP_Reachable s ->
-    (forall p,
-      p < n -> match fp_accepted (local s p) with
-          | None => True
-          | Some(proposer) => is_proposer proposer
+    FP_Reachable s -> 
+    (forall p, p < n -> match fp_accepted (local s p) with
+        | None => True
+        | Some(value) => is_proposer value
       end).
 Proof.
-  intros s Hs. induction Hs; simpl in H.
-  - unfold fp_init in H; destruct H as [
-      init_noout [[
-        [init_prop_accepted init_nonprop_accept] [init_prop_acceptors init_nonprop_acceptors]
-      ] [[init_prop_net init_nonprop_net] init_selfnet]]
-    ].
-    intros p p_valid. destruct (classic (is_proposer p)) as [Hprop | Hprop].
-    + rewrite (init_prop_accepted p p_valid Hprop). auto.
-    + rewrite (init_nonprop_accept p p_valid Hprop). auto.
-  - (* TODO *)
+  intros s Hs p p_valid. induction Hs; simpl in H.
+  - unfold fp_init in H; destruct H as [[_ [[prop_acc nonprop_acc] _]] _].
+    destruct (classic (is_proposer p)) as [prop | not_prop].
+    + rewrite (prop_acc p p_valid prop). auto.
+    + rewrite (nonprop_acc p p_valid not_prop). auto.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H]. destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      rewrite local_eq. exact IHHs.
+    + destruct H as [[p0_state other_state] _].
+      destruct (classic (p = p0)).
+      * destruct H. rewrite p0_state.
+        unfold fp_step_fn.
+        destruct (fp_output (local s p)); auto.
+        destruct (fp_accepted (local s p)) eqn:prev_acc.
+        -- (* already accepted value before: Use IHHs *)
+          destruct (Nat.eqb (proposer f0) p0); simpl.
+          ++ exact IHHs.
+          ++ rewrite prev_acc. exact IHHs.      
+        -- (* will accept the message's value. *)
+          simpl.
+          pose proof (all_message_values_valid s Hs src p src_valid p_valid) as Hmsg.
+          rewrite src_net in Hmsg.
+          exact (Forall_inv Hmsg).
+      * (* p != p0: other processes local state are unchanged *)
+        rewrite (other_state p H).
+        exact IHHs.
+Qed.
+
+Lemma all_outputs_valid :
+  forall s,
+    FP_Reachable s ->
+    forall p, p < n ->
+      match fp_output (local s p) with
+      | None => True
+      | Some (Commit v) => is_proposer v
+      | Some (Adopt v) => is_proposer v
+      end.
+Proof.
+  intros s Hs p p_valid. induction Hs; simpl in H.
+  - (* Init: all outputs are None. *)
+    unfold fp_init in H. destruct H as [[init_noout _] _].
+    rewrite (init_noout p p_valid). auto.
+  - (* Step: p0 receives the head message f0 from src. *)
+    unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + (* Empty queue: no message delivered, local states unchanged. *)
+      unfold state_eq in H. destruct H as [local_eq _].
+      rewrite local_eq. exact IHHs.
+    + destruct H as [[p0_state other_state] _].
+      destruct (classic (p = p0)).
+      * (* p = p0: p's local state was updated by fp_step_fn. *)
+        destruct H. rewrite p0_state.
+        destruct (fp_output (local s p)) as [o|] eqn:prev_out.
+        -- (* Output already set: fp_step_fn leaves local state unchanged. *)
+           rewrite (fp_step_fn_output_stable p (local s p) f0 o prev_out).
+           exact IHHs.
+        -- (* No output yet: inspect accepted value. *)
+           unfold fp_step_fn. rewrite prev_out.
+           destruct (fp_accepted (local s p)) as [v|] eqn:prev_acc.
+           ++ destruct (Nat.eqb (proposer f0) v).
+              ** (* Accepted value matches: might commit. *)
+                 simpl.
+                 destruct (fp_quorum <=? S (length (fp_acceptors (local s p)))).
+                 --- (* Quorum reached: output becomes Commit v. *)
+                     pose proof (all_accepted_values_valid s Hs p p_valid) as Hacc.
+                     rewrite prev_acc in Hacc. exact Hacc.
+                 --- (* Quorum not yet reached: output stays None. *)
+                     auto.
+              ** (* Accepted value does not match: state unchanged. *)
+                 simpl. rewrite prev_out. auto.
+           ++ (* Not yet accepted: will accept proposer f0, output stays None. *)
+              simpl. auto.
+      * (* p != p0: p's local state is unchanged. *)
+        rewrite (other_state p H).
+        exact IHHs.
 Qed.
 
 Theorem FastPaxos_Validity        : Validity n fp_instance.
-Proof. Admitted.
+Proof.
+  unfold Validity, fp_instance, output_of, valid_pid; simpl.
+  intros s p v Hs p_valid [Hout | Hout];
+    pose proof (all_outputs_valid s Hs p p_valid) as Hvalid;
+    rewrite Hout in Hvalid; exact Hvalid.
+Qed.
 
 Theorem FastPaxos_Agreement       : Agreement n fp_instance.
 Proof. Admitted.
