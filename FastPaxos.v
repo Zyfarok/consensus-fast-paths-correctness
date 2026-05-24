@@ -285,6 +285,54 @@ Proof.
         exact IHHs.
 Qed.
 
+Lemma fp_acceptors_nodup :
+  forall s,
+    FP_Reachable s ->
+    forall p, p < n -> NoDup (fp_acceptors (local s p)).
+Proof.
+  intros s Hs p p_valid. induction Hs; simpl in H.
+  - (* Init *)
+    unfold fp_init in H. destruct H as [[_ [_ [init_prop_acc init_nonprop_acc]]] _].
+    destruct (classic (is_proposer p)) as [Hprop | Hprop].
+    + (* Proposers. *)
+      rewrite (init_prop_acc p p_valid Hprop).
+      apply NoDup_cons; [intro Hin; exact Hin | constructor].
+    + (* Non-proposers. *)
+      rewrite (init_nonprop_acc p p_valid Hprop). constructor.
+  - (* Step *)
+    unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + (* No message delivered. *)
+      unfold state_eq in H. destruct H as [local_eq _].
+      rewrite local_eq. exact IHHs.
+    + destruct H as [[p0_state other_state] _].
+      destruct (classic (p = p0)).
+      * (* state of the running process. *)
+        destruct H. rewrite p0_state. unfold fp_step_fn.
+        destruct (fp_output (local s p)).
+        -- (* Output already set. *)
+           simpl. exact IHHs.
+        -- destruct (fp_accepted (local s p)) eqn:prev_acc.
+          ++ destruct (Nat.eqb (proposer f0) p0).
+            ** (* Proposer matches. *)
+              simpl.
+              destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists; try exact IHHs.
+              apply NoDup_cons; try exact IHHs.
+              intro Hin.
+              assert (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p)) = true)
+                as Hcontra
+                by (apply existsb_exists; exists (source f0);
+                    split; [exact Hin | apply Nat.eqb_refl]).
+              rewrite Hexists in Hcontra. discriminate.
+            ** (* Proposer doesn't match. *)
+                simpl. exact IHHs.
+          ++ (* Not yet accepted: new acceptors list is []. *)
+            simpl. constructor.
+      * (* other process states are unchanged. *)
+        rewrite (other_state p H). exact IHHs.
+Qed.
+
 Theorem FastPaxos_Validity        : Validity n fp_instance.
 Proof.
   unfold Validity, fp_instance, output_of, valid_pid; simpl.
