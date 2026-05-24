@@ -76,7 +76,11 @@ Definition fp_step_fn
             fun dst => if Nat.eqb dst (proposer m) then [mkFPMsg p (proposer m)] else [])
       | Some v =>
           if Nat.eqb (proposer m) v then
-            let new_acceptors := (source m) :: fp_acceptors ls in
+            let new_acceptors :=
+              if existsb (Nat.eqb (source m)) (fp_acceptors ls)
+              then fp_acceptors ls
+              else (source m) :: fp_acceptors ls
+            in
             let new_output :=
               if fp_quorum <=? List.length new_acceptors then Some (Commit v)
               else None
@@ -269,12 +273,9 @@ Proof.
            ++ destruct (Nat.eqb (proposer f0) v).
               ** (* Accepted value matches: might commit. *)
                  simpl.
-                 destruct (fp_quorum <=? S (length (fp_acceptors (local s p)))).
-                 --- (* Quorum reached: output becomes Commit v. *)
-                     pose proof (all_accepted_values_valid s Hs p p_valid) as Hacc.
-                     rewrite prev_acc in Hacc. exact Hacc.
-                 --- (* Quorum not yet reached: output stays None. *)
-                     auto.
+                 pose proof (all_accepted_values_valid s Hs p p_valid) as Hacc.
+                 rewrite prev_acc in Hacc.
+                 destruct (fp_quorum <=? _); auto.
               ** (* Accepted value does not match: state unchanged. *)
                  simpl. rewrite prev_out. auto.
            ++ (* Not yet accepted: will accept proposer f0, output stays None. *)
