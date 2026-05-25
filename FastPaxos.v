@@ -717,7 +717,15 @@ Proof.
 Qed.
 
 Theorem FastPaxos_Convergence     : Convergence n fp_instance.
-Proof. Admitted.
+Proof.
+  unfold Convergence, fp_instance, output_of, valid_pid, acp_proc_output, acp_is_proposer; simpl.
+  intros s p q o Hs p_valid q_valid Hprop Huniq Hout.
+  pose proof (all_outputs_valid s Hs q q_valid) as Hvalid.
+  rewrite Hout in Hvalid.
+  destruct o as [v | v].
+  - f_equal. exact (Huniq v Hvalid).
+  - exact (False_ind _ (fp_no_adopt s Hs q v q_valid Hout)).
+Qed.
 
 Theorem FastPaxos_Recoverability  : Recoverability n f fp_instance.
 Proof. Admitted.
