@@ -100,7 +100,7 @@ Definition fp_step_fn
     - Each proposer p has queued Proposal(p, p) to every other process q.
     - Non-proposers have no outgoing messages. *)
 Definition fp_init (s : GlobalState FPMsg FPState) : Prop :=
-  ((forall p, p < n ->
+  ((forall p,
       fp_output (local s p) = None) /\
   ((forall p, p < n -> is_proposer p ->
       fp_accepted  (local s p) = Some p) /\
@@ -251,7 +251,7 @@ Proof.
   intros s Hs p p_valid. induction Hs; simpl in H.
   - (* Init: all outputs are None. *)
     unfold fp_init in H. destruct H as [[init_noout _] _].
-    rewrite (init_noout p p_valid). auto.
+    rewrite (init_noout p). auto.
   - (* Step: p0 receives the head message f0 from src. *)
     unfold step, fp_instance in H; simpl in H.
     destruct H as [[p_not_src [src_valid p0_valid]] H].
@@ -518,7 +518,7 @@ Lemma commit_accepted :
 Proof.
   intros s Hs p. induction Hs; simpl in H.
   - unfold fp_init in H. destruct H as [[init_noout _] _].
-    intros v p_valid Hout. rewrite (init_noout p p_valid) in Hout. discriminate.
+    intros v p_valid Hout. rewrite (init_noout p) in Hout. discriminate.
   - unfold step, fp_instance in H; simpl in H.
     destruct H as [[p_not_src [src_valid p0_valid]] H].
     destruct (network s src p0) eqn:src_net.
@@ -559,7 +559,7 @@ Lemma commit_quorum :
 Proof.
   intros s Hs p. induction Hs; simpl in H.
   - unfold fp_init in H. destruct H as [[init_noout _] _].
-    intros v p_valid Hout. rewrite (init_noout p p_valid) in Hout. discriminate.
+    intros v p_valid Hout. rewrite (init_noout p) in Hout. discriminate.
   - unfold step, fp_instance in H; simpl in H.
     destruct H as [[p_not_src [src_valid p0_valid]] H].
     destruct (network s src p0) eqn:src_net.
@@ -673,7 +673,7 @@ Lemma fp_no_adopt :
 Proof.
   intros s Hs q. induction Hs; simpl in H.
   - unfold fp_init in H. destruct H as [[init_noout _] _].
-    intros w q_valid Hq. rewrite (init_noout q q_valid) in Hq. discriminate.
+    intros w q_valid Hq. rewrite (init_noout q) in Hq. discriminate.
   - unfold step, fp_instance in H; simpl in H.
     destruct H as [[_ [_ p_valid]] H].
     intros w q_valid Hq.
