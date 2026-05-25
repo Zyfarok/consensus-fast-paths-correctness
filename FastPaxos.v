@@ -713,7 +713,7 @@ Proof.
     pose proof (acceptors_accepted_inv s Hs p v p_valid Hacc_p r HrA) as Hrv.
     pose proof (acceptors_accepted_inv s Hs q w q_valid Hacc_q r HrB) as Hrw.
     congruence.
-  - exact (False_ind _ (fp_no_adopt s Hs q w q_valid Hq)).
+  - destruct (fp_no_adopt s Hs q w q_valid Hq).
 Qed.
 
 Theorem FastPaxos_Convergence     : Convergence n fp_instance.
@@ -724,10 +724,130 @@ Proof.
   rewrite Hout in Hvalid.
   destruct o as [v | v].
   - f_equal. exact (Huniq v Hvalid).
-  - exact (False_ind _ (fp_no_adopt s Hs q v q_valid Hout)).
+  - destruct (fp_no_adopt s Hs q v q_valid Hout).
+Qed.
+
+(** Any committed process has a valid PID (< n). *)
+Lemma fp_commit_pid_valid :
+  forall s, FP_Reachable s ->
+  forall p v, fp_output (local s p) = Some (Commit v) -> p < n.
+Proof.
+  intros s Hs p v. induction Hs; simpl in H.
+  - unfold fp_init in H. destruct H as [[init_noout _] _].
+    intro Hout. rewrite (init_noout p) in Hout. discriminate.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[_ [_ p0_valid]] H].
+    intro Hout.
+    destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      rewrite (local_eq p) in Hout. exact (IHHs Hout).
+    + destruct H as [[p0_state other_state] _].
+      destruct (classic (p = p0)) as [Hpp0 | Hpp0].
+      * subst p0. exact p0_valid.
+      * rewrite (other_state p Hpp0) in Hout. exact (IHHs Hout).
+Qed.
+
+(** General pigeonhole: two NoDup lists over {0..m-1} whose sizes sum to > m must share an element. *)
+Lemma list_intersection :
+  forall (A B : list ProcessId) (m : nat),
+    NoDup A -> (forall a, In a A -> a < m) ->
+    NoDup B -> (forall b, In b B -> b < m) ->
+    m < length A + length B ->
+    exists r, In r A /\ In r B.
+Proof.
+  intros A B m Hnd_A Hval_A Hnd_B Hval_B Hlt.
+  apply Classical_Pred_Type.not_all_not_ex.
+  intro Hall.
+  assert (Hdisj : forall r, In r A -> ~ In r B).
+  { intros r Hr HrB. exact (Hall r (conj Hr HrB)). }
+  assert (Hnd_AB : NoDup (A ++ B)) by (apply NoDup_app; auto).
+  assert (Hincl : incl (A ++ B) (seq 0 m)).
+  { intros x Hx. apply in_app_iff in Hx.
+    apply in_seq. split; [lia |].
+    destruct Hx; [exact (Hval_A x H) | exact (Hval_B x H)]. }
+  pose proof (NoDup_incl_length Hnd_AB Hincl) as Hle.
+  rewrite length_app, length_seq in Hle. lia.
+Qed.
+
+(** The intersection of two NoDup bounded-nat lists has size at least |A| + |B| - m. *)
+Lemma filter_inter_lb :
+  forall (A B : list ProcessId) (m : nat),
+    NoDup A -> (forall a, In a A -> a < m) ->
+    NoDup B -> (forall b, In b B -> b < m) ->
+    length A + length B <= m + length (filter (fun a => existsb (Nat.eqb a) B) A).
+Proof.
+  intros A B m Hnd_A Hval_A Hnd_B Hval_B.
+  set (f_in := fun a => existsb (Nat.eqb a) B).
+  set (D := filter (fun a => negb (f_in a)) A).
+  assert (H_part : length (filter f_in A) + length D = length A).
+  { unfold D. exact (filter_length f_in A). }
+  assert (Hnd_D : NoDup D) by (apply NoDup_filter; exact Hnd_A).
+  assert (Hincl_D : incl D (filter (fun x => negb (f_in x)) (seq 0 m))).
+  { intros x Hx. apply filter_In in Hx as [HxA HxnB].
+    apply filter_In. split.
+    - apply in_seq. split; [lia | exact (Hval_A x HxA)].
+    - exact HxnB. }
+  assert (Hlen_D : length D <= length (filter (fun x => negb (f_in x)) (seq 0 m)))
+    by exact (NoDup_incl_length Hnd_D Hincl_D).
+  assert (Hseq_B : length (filter f_in (seq 0 m)) = length B).
+  { apply Nat.le_antisymm.
+    - apply NoDup_incl_length; [apply NoDup_filter, seq_NoDup |].
+      intros x Hx. apply filter_In in Hx as [_ HxB].
+      unfold f_in in HxB. apply existsb_exists in HxB as [y [HyB Heq]].
+      apply Nat.eqb_eq in Heq. subst y. exact HyB.
+    - apply NoDup_incl_length; [exact Hnd_B |].
+      intros b Hb. apply filter_In. split.
+      + apply in_seq. split; [lia | exact (Hval_B b Hb)].
+      + unfold f_in. apply existsb_exists. exists b. split; [exact Hb | apply Nat.eqb_refl]. }
+  pose proof (filter_length f_in (seq 0 m)) as H_seq_part.
+  rewrite length_seq, Hseq_B in H_seq_part.
+  lia.
 Qed.
 
 Theorem FastPaxos_Recoverability  : Recoverability n f fp_instance.
-Proof. Admitted.
+Proof.
+  unfold Recoverability, fp_instance, output_of, valid_pid, acp_proc_output; simpl.
+  intros s s' alive v w Hs Hs' Hnd_alive Hlen_alive Hval_alive Hlocal_eq [p Hp] [q Hq].
+  pose proof (fp_commit_pid_valid s Hs p v Hp) as p_valid.
+  pose proof (fp_commit_pid_valid s' Hs' q w Hq) as q_valid.
+  pose proof (commit_accepted s Hs p v p_valid Hp) as Hacc_p.
+  pose proof (commit_quorum s Hs p v p_valid Hp) as Hquorum_p.
+  pose proof (fp_acceptors_nodup s Hs p p_valid) as Hnd_Ap.
+  pose proof (fun r Hr => acceptors_valid s Hs p p_valid r Hr) as Hval_Ap.
+  pose proof (fun r Hr => acceptors_accepted_inv s Hs p v p_valid Hacc_p r Hr) as Hacc_Ap.
+  pose proof (commit_accepted s' Hs' q w q_valid Hq) as Hacc_q.
+  pose proof (commit_quorum s' Hs' q w q_valid Hq) as Hquorum_q.
+  pose proof (fp_acceptors_nodup s' Hs' q q_valid) as Hnd_Aq.
+  pose proof (fun r Hr => acceptors_valid s' Hs' q q_valid r Hr) as Hval_Aq.
+  pose proof (fun r Hr => acceptors_accepted_inv s' Hs' q w q_valid Hacc_q r Hr) as Hacc_Aq.
+  (* B = alive processes that are in q's acceptor list in s' *)
+  set (B := filter (fun r => existsb (Nat.eqb r) alive) (fp_acceptors (local s' q))).
+  assert (Hnd_B : NoDup B) by (apply NoDup_filter; exact Hnd_Aq).
+  assert (Hval_B : forall r, In r B -> r < n).
+  { intros r Hr. apply filter_In in Hr as [Hr _]. exact (Hval_Aq r Hr). }
+  (* Every r in B has fp_accepted(s, r) = Some w *)
+  assert (Hacc_B : forall r, In r B -> fp_accepted (local s r) = Some w).
+  { intros r Hr.
+    apply filter_In in Hr as [HrAq Hr_alive].
+    apply existsb_exists in Hr_alive as [r' [Hr'alive Heq]].
+    apply Nat.eqb_eq in Heq. subst r'.
+    rewrite (Hlocal_eq r Hr'alive). exact (Hacc_Aq r HrAq). }
+  (* |A_q(s')| + |alive| <= n + |B|, so |B| is large *)
+  pose proof (filter_inter_lb (fp_acceptors (local s' q)) alive n
+                Hnd_Aq Hval_Aq Hnd_alive Hval_alive) as Hlen_B.
+  fold B in Hlen_B.
+  (* n < |A_p(s)| + |B| by arithmetic on quorum sizes *)
+  assert (Hsum : n < length (fp_acceptors (local s p)) + length B).
+  { unfold fp_quorum in *.
+    pose proof (Nat.div_mod (n - f) 2 ltac:(lia)) as Hdiv.
+    pose proof (Nat.mod_upper_bound (n - f) 2 ltac:(lia)) as Hmod.
+    lia. }
+  (* Get witness r in A_p(s) inter B *)
+  destruct (list_intersection (fp_acceptors (local s p)) B n
+              Hnd_Ap Hval_Ap Hnd_B Hval_B Hsum) as [r [HrAp HrB]].
+  pose proof (Hacc_Ap r HrAp) as Hrv.
+  pose proof (Hacc_B r HrB) as Hrw.
+  congruence.
+Qed.
 
 End FP.
