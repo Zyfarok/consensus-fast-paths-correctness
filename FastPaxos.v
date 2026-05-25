@@ -15,7 +15,7 @@
       acceptors have been collected (counting itself).
     - Messages about a proposer other than the one already accepted are ignored. *)
 
-From Stdlib Require Import List Arith Bool Classical.
+From Stdlib Require Import List Arith Bool Classical Lia.
 Import ListNotations.
 
 Require Import AdoptCommit.
@@ -510,8 +510,211 @@ Proof.
         -- rewrite (other_state r Hrp0). exact Hrfp.
 Qed.
 
+Lemma commit_accepted :
+  forall s, FP_Reachable s ->
+  forall p v, p < n ->
+    fp_output (local s p) = Some (Commit v) ->
+    fp_accepted (local s p) = Some v.
+Proof.
+  intros s Hs p. induction Hs; simpl in H.
+  - unfold fp_init in H. destruct H as [[init_noout _] _].
+    intros v p_valid Hout. rewrite (init_noout p p_valid) in Hout. discriminate.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      intros v p_valid Hout. rewrite (local_eq p) in Hout.
+      rewrite (local_eq p). exact (IHHs v p_valid Hout).
+    + destruct H as [[p0_state other_state] _].
+      intros v p_valid Hout.
+      destruct (classic (p = p0)) as [Hpp0 | Hpp0].
+      * subst p0. rewrite p0_state in Hout.
+        unfold fp_step_fn in Hout.
+        destruct (fp_output (local s p)) as [o|] eqn:Hprev_out.
+        -- simpl in Hout.
+           assert (Ho : Some o = Some (Commit v)) by congruence.
+           rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
+           exact (IHHs v p_valid Ho).
+        -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
+           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+              ** apply Nat.eqb_eq in Hprop. subst w.
+                 simpl in Hout.
+                 destruct (fp_quorum <=? length _) eqn:Hle.
+                 { injection Hout as Hveq. subst v.
+                   rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
+                   rewrite Nat.eqb_refl. simpl. reflexivity. }
+                 { discriminate. }
+              ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
+           ++ simpl in Hout. discriminate.
+      * rewrite (other_state p Hpp0) in Hout.
+        rewrite (other_state p Hpp0).
+        exact (IHHs v p_valid Hout).
+Qed.
+
+Lemma commit_quorum :
+  forall s, FP_Reachable s ->
+  forall p v, p < n ->
+    fp_output (local s p) = Some (Commit v) ->
+    fp_quorum <= length (fp_acceptors (local s p)).
+Proof.
+  intros s Hs p. induction Hs; simpl in H.
+  - unfold fp_init in H. destruct H as [[init_noout _] _].
+    intros v p_valid Hout. rewrite (init_noout p p_valid) in Hout. discriminate.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      intros v p_valid Hout. rewrite (local_eq p) in Hout.
+      rewrite (local_eq p). exact (IHHs v p_valid Hout).
+    + destruct H as [[p0_state other_state] _].
+      intros v p_valid Hout.
+      destruct (classic (p = p0)) as [Hpp0 | Hpp0].
+      * subst p0. rewrite p0_state in Hout.
+        unfold fp_step_fn in Hout.
+        destruct (fp_output (local s p)) as [o|] eqn:Hprev_out.
+        -- simpl in Hout.
+           assert (Ho : Some o = Some (Commit v)) by congruence.
+           rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
+           exact (IHHs v p_valid Ho).
+        -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
+           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+              ** apply Nat.eqb_eq in Hprop. subst w.
+                 simpl in Hout.
+                 destruct (fp_quorum <=? length _) eqn:Hle.
+                 { rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
+                   rewrite Nat.eqb_refl. simpl.
+                   apply Nat.leb_le. exact Hle. }
+                 { discriminate. }
+              ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
+           ++ simpl in Hout. discriminate.
+      * rewrite (other_state p Hpp0) in Hout.
+        rewrite (other_state p Hpp0).
+        exact (IHHs v p_valid Hout).
+Qed.
+
+Lemma acceptors_valid :
+  forall s, FP_Reachable s ->
+  forall p, p < n ->
+  forall r, In r (fp_acceptors (local s p)) -> r < n.
+Proof.
+  intros s Hs p. induction Hs; simpl in H.
+  - unfold fp_init in H.
+    destruct H as [[_ [_ [prop_accs nonprop_accs]]] _].
+    intros p_valid r Hr.
+    destruct (classic (is_proposer p)) as [Hprop | Hprop].
+    + rewrite (prop_accs p p_valid Hprop) in Hr.
+      simpl in Hr. destruct Hr as [Heq | []]. subst r. exact p_valid.
+    + rewrite (nonprop_accs p p_valid Hprop) in Hr. destruct Hr.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      intros p_valid r Hr. rewrite (local_eq p) in Hr.
+      exact (IHHs p_valid r Hr).
+    + destruct H as [[p0_state other_state] _].
+      pose proof (message_inv s Hs src p0 src_valid p0_valid) as Hmsg.
+      rewrite src_net in Hmsg. apply Forall_inv in Hmsg.
+      destruct Hmsg as [Hsrc_f0 _].
+      intros p_valid r Hr.
+      destruct (classic (p = p0)) as [Hpp0 | Hpp0].
+      * subst p0. rewrite p0_state in Hr. unfold fp_step_fn in Hr.
+        destruct (fp_output (local s p)).
+        -- simpl in Hr. exact (IHHs p_valid r Hr).
+        -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
+           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+              ** simpl in Hr.
+                 destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
+                 { simpl in Hr. exact (IHHs p_valid r Hr). }
+                 { simpl in Hr. destruct Hr as [Heq | Hr_old].
+                   - subst r. rewrite Hsrc_f0. exact src_valid.
+                   - exact (IHHs p_valid r Hr_old). }
+              ** simpl in Hr. exact (IHHs p_valid r Hr).
+           ++ simpl in Hr. destruct Hr.
+      * rewrite (other_state p Hpp0) in Hr.
+        exact (IHHs p_valid r Hr).
+Qed.
+
+Lemma fp_quorum_gt_half : n < 2 * fp_quorum.
+Proof.
+  unfold fp_quorum.
+  pose proof (Nat.div_mod (n - f) 2 ltac:(lia)) as H1.
+  pose proof (Nat.mod_upper_bound (n - f) 2 ltac:(lia)) as H2.
+  lia.
+Qed.
+
+Lemma quorum_intersection :
+  forall (A B : list ProcessId),
+    NoDup A -> (forall a, In a A -> a < n) ->
+    NoDup B -> (forall b, In b B -> b < n) ->
+    fp_quorum <= length A -> fp_quorum <= length B ->
+    exists r, In r A /\ In r B.
+Proof.
+  intros A B Hnd_A Hval_A Hnd_B Hval_B Hlen_A Hlen_B.
+  apply Classical_Pred_Type.not_all_not_ex.
+  intro Hall.
+  assert (Hdisj : forall r, In r A -> ~ In r B).
+  { intros r Hr HrB. exact (Hall r (conj Hr HrB)). }
+  assert (Hnd_AB : NoDup (A ++ B)).
+  { apply NoDup_app; auto. }
+  assert (Hincl : incl (A ++ B) (seq 0 n)).
+  { intros x Hx. apply in_app_iff in Hx.
+    apply in_seq. split; [lia |].
+    destruct Hx as [Hx | Hx]; [exact (Hval_A x Hx) | exact (Hval_B x Hx)]. }
+  pose proof (NoDup_incl_length Hnd_AB Hincl) as Hle.
+  rewrite length_app, length_seq in Hle.
+  pose proof fp_quorum_gt_half.
+  lia.
+Qed.
+
+Lemma fp_no_adopt :
+  forall s, FP_Reachable s ->
+  forall q w, q < n ->
+    fp_output (local s q) <> Some (Adopt w).
+Proof.
+  intros s Hs q. induction Hs; simpl in H.
+  - unfold fp_init in H. destruct H as [[init_noout _] _].
+    intros w q_valid Hq. rewrite (init_noout q q_valid) in Hq. discriminate.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[_ [_ p_valid]] H].
+    intros w q_valid Hq.
+    destruct (network s src p) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      rewrite (local_eq q) in Hq. exact (IHHs w q_valid Hq).
+    + destruct H as [[p_state other_state] _].
+      destruct (classic (q = p)) as [Hqp | Hqp].
+      * subst p. rewrite p_state in Hq. unfold fp_step_fn in Hq.
+        destruct (fp_output (local s q)) as [o|] eqn:Hprev.
+        -- simpl in Hq. exact (IHHs w q_valid (eq_trans (eq_sym Hprev) Hq)).
+        -- destruct (fp_accepted (local s q)).
+           ++ destruct (Nat.eqb _ _).
+              ** simpl in Hq. destruct (fp_quorum <=? _); discriminate.
+              ** simpl in Hq. exact (IHHs w q_valid (eq_trans (eq_sym Hprev) Hq)).
+           ++ simpl in Hq. discriminate.
+      * rewrite (other_state q Hqp) in Hq. exact (IHHs w q_valid Hq).
+Qed.
+
 Theorem FastPaxos_Agreement       : Agreement n fp_instance.
-Proof. Admitted.
+Proof.
+  unfold Agreement, fp_instance, output_of, valid_pid, acp_proc_output; simpl.
+  intros s p q v w Hs p_valid q_valid Hp Hq.
+  destruct Hq as [Hq | Hq].
+  - pose proof (commit_accepted s Hs p v p_valid Hp) as Hacc_p.
+    pose proof (commit_quorum s Hs p v p_valid Hp) as Hquorum_p.
+    pose proof (commit_accepted s Hs q w q_valid Hq) as Hacc_q.
+    pose proof (commit_quorum s Hs q w q_valid Hq) as Hquorum_q.
+    pose proof (fp_acceptors_nodup s Hs p p_valid) as Hnd_p.
+    pose proof (fp_acceptors_nodup s Hs q q_valid) as Hnd_q.
+    pose proof (fun r Hr => acceptors_valid s Hs p p_valid r Hr) as Hval_p.
+    pose proof (fun r Hr => acceptors_valid s Hs q q_valid r Hr) as Hval_q.
+    destruct (quorum_intersection
+                (fp_acceptors (local s p)) (fp_acceptors (local s q))
+                Hnd_p Hval_p Hnd_q Hval_q Hquorum_p Hquorum_q)
+      as [r [HrA HrB]].
+    pose proof (acceptors_accepted_inv s Hs p v p_valid Hacc_p r HrA) as Hrv.
+    pose proof (acceptors_accepted_inv s Hs q w q_valid Hacc_q r HrB) as Hrw.
+    congruence.
+  - exact (False_ind _ (fp_no_adopt s Hs q w q_valid Hq)).
+Qed.
 
 Theorem FastPaxos_Convergence     : Convergence n fp_instance.
 Proof. Admitted.
