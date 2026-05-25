@@ -132,7 +132,7 @@ Definition FP_Reachable   := Reachable n fp_instance.
    ================================================================ *)
 
 (** fp_step_fn never discards an existing output. *)
-Lemma fp_step_fn_output_stable :
+Lemma fp_output_stable :
   forall p ls m o,
     fp_output ls = Some o ->
     fp_output (fst (fp_step_fn p ls m)) = Some o.
@@ -265,7 +265,7 @@ Proof.
         destruct H. rewrite p0_state.
         destruct (fp_output (local s p)) as [o|] eqn:prev_out.
         -- (* Output already set: fp_step_fn leaves local state unchanged. *)
-           rewrite (fp_step_fn_output_stable p (local s p) f0 o prev_out).
+           rewrite (fp_output_stable p (local s p) f0 o prev_out).
            exact IHHs.
         -- (* No output yet: inspect accepted value. *)
            unfold fp_step_fn. rewrite prev_out.
@@ -283,6 +283,106 @@ Proof.
       * (* p != p0: p's local state is unchanged. *)
         rewrite (other_state p H).
         exact IHHs.
+Qed.
+
+Theorem FastPaxos_Validity        : Validity n fp_instance.
+Proof.
+  unfold Validity, fp_instance, output_of, valid_pid; simpl.
+  intros s p v Hs p_valid [Hout | Hout];
+    pose proof (all_outputs_valid s Hs p p_valid) as Hvalid;
+    rewrite Hout in Hvalid; exact Hvalid.
+Qed.
+
+(** fp_step_fn never changes an already-accepted value. *)
+Lemma fp_accepted_stable :
+  forall p ls m v,
+    fp_accepted ls = Some v ->
+    fp_accepted (fst (fp_step_fn p ls m)) = Some v.
+Proof.
+  intros p ls m v Hacc.
+  unfold fp_step_fn.
+  destruct (fp_output ls); [simpl; exact Hacc |].
+  rewrite Hacc. simpl.
+  destruct (Nat.eqb (proposer m) v); simpl; [reflexivity | exact Hacc].
+Qed.
+
+(** The source of every message has accepted the value. *)
+Lemma message_inv :
+  forall s,
+    FP_Reachable s ->
+    forall src dest,
+      src < n -> dest < n ->
+      Forall (fun msg => source msg = src /\
+                         fp_accepted (local s src) = Some (proposer msg))
+             (network s src dest).
+Proof.
+  intros s Hs. induction Hs; simpl in H.
+  - unfold fp_init in H.
+    destruct H as [[_ [[prop_acc _] _]] [[prop_net nonprop_net] net_self]].
+    intros src dest src_valid dest_valid.
+    destruct (classic (is_proposer src)) as [Hprop | Hprop].
+    + destruct (classic (src = dest)) as [Heq | Hneq].
+      * destruct Heq. rewrite (net_self src src_valid). constructor.
+      * rewrite (prop_net src dest src_valid dest_valid Hneq Hprop).
+        constructor; [| constructor]. simpl. split.
+        -- reflexivity.
+        -- rewrite (prop_acc src src_valid Hprop). reflexivity.
+    + rewrite (nonprop_net src dest src_valid dest_valid Hprop). constructor.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p_valid]] H].
+    destruct (network s src p) eqn:src_net.
+    + (* No message delivered. *)
+      unfold state_eq in H. destruct H as [local_eq net_eq].
+      intros src0 dest src0_valid dest_valid.
+      rewrite net_eq.
+      eapply Forall_impl.
+      2: exact (IHHs src0 dest src0_valid dest_valid).
+      intros msg [Hsrc Hacc]. split; [exact Hsrc | rewrite local_eq; exact Hacc].
+    + destruct H as [[p0_state other_state] [H_net_p_in [H_net_p_out H_net_other]]].
+      intros src0 dest src0_valid dest_valid.
+      destruct (classic (src0 = src)) as [Hsrc0 | Hsrc0].
+      * subst src0.
+        destruct (classic (dest = p)) as [Hdest | Hdest].
+        -- (* src -> p: head consumed, rest unchanged. *)
+           subst dest. rewrite H_net_p_in.
+           pose proof (IHHs src p src_valid p_valid) as Hold.
+           rewrite src_net in Hold. apply Forall_inv_tail in Hold.
+           eapply Forall_impl.
+           2: exact Hold.
+           intros msg [Hsrc Hacc]. split; [exact Hsrc |].
+           rewrite (other_state src p_not_src). exact Hacc.
+        -- (* src -> other dest: queue unchanged. *)
+           rewrite (H_net_other src dest p_not_src (or_introl Hdest)).
+           eapply Forall_impl.
+           2: exact (IHHs src dest src_valid dest_valid).
+           intros msg [Hsrc Hacc]. split; [exact Hsrc |].
+           rewrite (other_state src p_not_src). exact Hacc.
+      * destruct (classic (src0 = p)) as [Hsp | Hsp].
+        -- (* p's outgoing queues: new messages from fp_step_fn. *)
+           subst src0. rewrite H_net_p_out. rewrite Forall_app. split.
+           ++ (* Old messages. *)
+              eapply Forall_impl.
+              2: exact (IHHs p dest p_valid dest_valid).
+              intros msg [Hsrcmsg Hacc]. split; [exact Hsrcmsg |].
+              rewrite p0_state.
+              exact (fp_accepted_stable p (local s p) f0 (proposer msg) Hacc).
+           ++ (* New messages. *)
+              unfold fp_step_fn.
+              destruct (fp_output (local s p)) as [o|] eqn:Hout; [simpl; constructor |].
+              destruct (fp_accepted (local s p)) as [v|] eqn:Hacc_eq.
+              ** destruct (Nat.eqb (proposer f0) v); simpl; constructor.
+              ** simpl. destruct (dest =? proposer f0) eqn:Hdest_eq; [| constructor].
+                 apply Nat.eqb_eq in Hdest_eq. subst dest.
+                 constructor; [| constructor]. simpl. split.
+                 { reflexivity. }
+                 { rewrite p0_state. unfold fp_step_fn. rewrite Hout. rewrite Hacc_eq.
+                   simpl. reflexivity. }
+        -- (* Other queues unchanged. *)
+           rewrite (H_net_other src0 dest Hsp (or_intror Hsrc0)).
+           eapply Forall_impl.
+           2: exact (IHHs src0 dest src0_valid dest_valid).
+           intros msg [Hsrc Hacc]. split; [exact Hsrc |].
+           rewrite (other_state src0 Hsp). exact Hacc.
 Qed.
 
 Lemma fp_acceptors_nodup :
@@ -331,14 +431,6 @@ Proof.
             simpl. constructor.
       * (* other process states are unchanged. *)
         rewrite (other_state p H). exact IHHs.
-Qed.
-
-Theorem FastPaxos_Validity        : Validity n fp_instance.
-Proof.
-  unfold Validity, fp_instance, output_of, valid_pid; simpl.
-  intros s p v Hs p_valid [Hout | Hout];
-    pose proof (all_outputs_valid s Hs p p_valid) as Hvalid;
-    rewrite Hout in Hvalid; exact Hvalid.
 Qed.
 
 Theorem FastPaxos_Agreement       : Agreement n fp_instance.
