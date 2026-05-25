@@ -433,6 +433,83 @@ Proof.
         rewrite (other_state p H). exact IHHs.
 Qed.
 
+(** Every process in p's acceptor list has also accepted p's value. *)
+Lemma acceptors_accepted_inv :
+  forall s,
+    FP_Reachable s ->
+    forall p v, p < n ->
+      fp_accepted (local s p) = Some v ->
+      forall r, In r (fp_acceptors (local s p)) ->
+        fp_accepted (local s r) = Some v.
+Proof.
+  intros s Hs p. induction Hs; simpl in H.
+  - unfold fp_init in H.
+    destruct H as [[_ [[prop_acc nonprop_acc] [prop_accs nonprop_accs]]] _].
+    intros v p_valid Hacc r Hr.
+    destruct (classic (is_proposer p)) as [Hprop | Hprop].
+    + rewrite (prop_accs p p_valid Hprop) in Hr.
+      simpl in Hr. destruct Hr as [Heq | []]. subst r. exact Hacc.
+    + rewrite (nonprop_accs p p_valid Hprop) in Hr. destruct Hr.
+  - unfold step, fp_instance in H; simpl in H.
+    destruct H as [[p_not_src [src_valid p0_valid]] H].
+    destruct (network s src p0) eqn:src_net.
+    + unfold state_eq in H. destruct H as [local_eq _].
+      intros v p_valid Hacc r Hr.
+      rewrite (local_eq p) in Hacc, Hr. rewrite (local_eq r).
+      exact (IHHs v p_valid Hacc r Hr).
+    + destruct H as [[p0_state other_state] _].
+      pose proof (message_inv s Hs src p0 src_valid p0_valid) as Hmsg.
+      rewrite src_net in Hmsg. apply Forall_inv in Hmsg.
+      destruct Hmsg as [Hsrc_f0 Hacc_src].
+      intros v p_valid Hacc r Hr.
+      destruct (classic (p = p0)) as [Hpp0 | Hpp0].
+      * subst p0. rewrite p0_state in Hacc, Hr.
+        unfold fp_step_fn in Hacc, Hr.
+        (* p = p0 after subst: all p0 refs below refer to p. *)
+        destruct (fp_output (local s p)) as [o|] eqn:Hout.
+        -- simpl in Hacc, Hr.
+           pose proof (IHHs v p_valid Hacc r Hr) as Hrfp.
+           destruct (classic (r = p)) as [Hrp | Hrp].
+           ++ subst r. rewrite p0_state.
+              exact (fp_accepted_stable p (local s p) f0 v Hrfp).
+           ++ rewrite (other_state r Hrp). exact Hrfp.
+        -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
+           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+              ** apply Nat.eqb_eq in Hprop.
+                 simpl in Hacc. injection Hacc as Hwv. subst v.
+                 simpl in Hr.
+                 destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
+                 { simpl in Hr.
+                   pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
+                   destruct (classic (r = p)) as [Hrp | Hrp].
+                   - subst r. rewrite p0_state.
+                     exact (fp_accepted_stable p (local s p) f0 w Hrfp).
+                   - rewrite (other_state r Hrp). exact Hrfp. }
+                 { simpl in Hr. destruct Hr as [Heq | Hr_old].
+                   - rewrite <- Heq. rewrite Hsrc_f0.
+                     rewrite (other_state src p_not_src). congruence.
+                   - pose proof (IHHs w p_valid eq_refl r Hr_old) as Hrfp.
+                     destruct (classic (r = p)) as [Hrp | Hrp].
+                     + subst r. rewrite p0_state.
+                       exact (fp_accepted_stable p (local s p) f0 w Hrfp).
+                     + rewrite (other_state r Hrp). exact Hrfp. }
+              ** simpl in Hacc, Hr.
+                 assert (Hvw : w = v) by congruence.
+                 subst v.
+                 pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
+                 destruct (classic (r = p)) as [Hrp | Hrp].
+                 { subst r. rewrite p0_state.
+                   exact (fp_accepted_stable p (local s p) f0 w Hrfp). }
+                 { rewrite (other_state r Hrp). exact Hrfp. }
+           ++ simpl in Hr. destruct Hr.
+      * rewrite (other_state p Hpp0) in Hacc, Hr.
+        pose proof (IHHs v p_valid Hacc r Hr) as Hrfp.
+        destruct (classic (r = p0)) as [Hrp0 | Hrp0].
+        -- subst r. rewrite p0_state.
+           exact (fp_accepted_stable p0 (local s p0) f0 v Hrfp).
+        -- rewrite (other_state r Hrp0). exact Hrfp.
+Qed.
+
 Theorem FastPaxos_Agreement       : Agreement n fp_instance.
 Proof. Admitted.
 
