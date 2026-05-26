@@ -165,8 +165,8 @@ Definition Recoverability : Prop :=
     n - f <= List.length alive ->
     (forall p, List.In p alive -> valid_pid p) ->
     (forall p, List.In p alive -> local s p = local s' p) ->
-    (exists p, output_of s p = Some (Commit v)) ->
-    (exists q, output_of s' q = Some (Commit w)) ->
+    (exists q, output_of s q = Some (Commit v)) ->
+    (exists r, output_of s' r = Some (Commit w)) ->
     v = w.
 
 End AC.
