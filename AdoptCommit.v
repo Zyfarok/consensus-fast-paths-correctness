@@ -1,23 +1,22 @@
 (** * Authored by Clément Burgelin, 2026-05
 
-    This file defines the generic adopt-commit that we will later instantiate,
+    This file defines the generic adopt-commit template that we use to
+    represent consensus fast-paths (and optionnally their recovery),
     as well as the core properties that we want to prove.
 
-    This work is in part inspired by Giuliano Losa's
-    Abortable linearizable modules in Isabelle/HOL,
-    available on the Archive of Formal Proofs website:
+    The reachability-based approach is inspired by Giuliano Losa's
+    Abortable linearizable modules in Isabelle/HOL, available on
+    the Archive of Formal Proofs website:
     https://isa-afp.org/browser_info/current/AFP/Abortable_Linearizable_Modules/
     (Which itself is part of larger work on Speculative linearizability,
     published at PLDI 2012: https://dl.acm.org/doi/abs/10.1145/2345156.2254072)
 
-    We adopt a similar reachability-based approach to defining safety properties,
-    but we focus on the adopt-commit problem rather than abortable linearizability,
-    and we use Rocq rather than Isabelle/HOL.
-
-    By Assuming that messages are never lost, duplicated or reordered (which can
+    Here, since we model a distributed system, we need to model the network.
+    By Assuming that messages are never duplicated or reordered (which can
     be implemented via TCP for example), we can simply model a single type
-    of step: the delivery of a message by a process.
-    *)
+    of step: the delivery of a message by a process. We assume a partially
+    synchronous network, and message delays or messages being lost simply map
+    to the non-delivery of that message. *)
 
 From Stdlib Require Import List.
 Import ListNotations.
@@ -44,7 +43,9 @@ Section AC.
 Variable n : nat.
 Hypothesis n_pos : 0 < n.
 
-(** Number of tolerated process failures. *)
+(** Number of tolerated process failures. 
+    Note: We only require f < n for safety, but liveness
+    would actually require 2*f < n*)
 Variable f : nat.
 Hypothesis f_lt_n : f < n.
 
@@ -54,22 +55,20 @@ Variable Msg        : Type.
 Variable LocalState : Type.
 
 (** Global state: per-process local state + per-(src, dst) FIFO message queues.
-    [network s src dst] is the queue of messages sent by src to dst,
-    head = oldest (next to deliver). *)
+    [(network s) src dst] is the queue of messages sent by src to dst,
+    the head is the oldest message (next to deliver). *)
 Record GlobalState := mkGlobalState {
   local   : ProcessId -> LocalState;
   network : ProcessId -> ProcessId -> list Msg;
 }.
 
-(** Equality on global states: two states are equivalent when
-    all local states and all network queues agree pointwise. *)
 Definition state_eq (s s' : GlobalState) : Prop :=
   (forall q, local s' q = local s q) /\
   (forall q_src q_dst, network s' q_src q_dst = network s q_src q_dst).
 
-(** A protocol instance bundles the four protocol-specific parameters:
-    how to extract a decision, which processes are proposers, the initial
-    state predicate, and the pure local transition function. *)
+(** A protocol instance bundles the four instance-specific parameters:
+    a mapping from state to decision, which processes are proposers,
+    the allowed initial states, and the local transition function. *)
 Record ACProtocol := mkACProtocol {
   acp_proc_output : LocalState -> option ACOutput;
   acp_is_proposer : ProcessId -> Prop;
@@ -78,16 +77,17 @@ Record ACProtocol := mkACProtocol {
                     LocalState * (ProcessId -> list Msg);
 }.
 
+(* Note/TODO: The above model can not enforce output to be stable
+  (a process that commits/adopt should not be able to change it's mind)
+  This can be enforced by each protocol, but a better design could
+  have enforced this via a different GlobalState and acp_step_fn.
+  *)
+
 Variable P : ACProtocol.
 
+(** It is useless to model executions with no proposers *)
 Hypothesis exists_proposer :
   exists p, valid_pid p /\ acp_is_proposer P p.
-
-(** acp_step_fn never discards an existing output decision. *)
-Hypothesis step_fn_output_stable :
-  forall p ls m o,
-    acp_proc_output P ls = Some o ->
-    acp_proc_output P (fst (acp_step_fn P p ls m)) = Some o.
 
 (** Shorthand: output of process p in state s. *)
 Definition output_of (s : GlobalState) (p : ProcessId) : option ACOutput :=
@@ -95,10 +95,10 @@ Definition output_of (s : GlobalState) (p : ProcessId) : option ACOutput :=
 
 (** [step p src s s'] holds when src != p and s' is the state obtained after
     p processes the next message from src.
-    - If the queue is empty the step is a no-op (s' = s componentwise).
-    - Otherwise p's local state is updated by acp_step_fn; the consumed slot
-      (src->p) loses its head; p's outgoing queues grow by the messages
-      prescribed by acp_step_fn; all other queues are unchanged. *)
+    - If the queue is empty the step is a no-op.
+    - Otherwise p's local state is updated by acp_step_fn, the consumed message
+    is removed from the queue, and new message go in p's outgoing queues.
+    all other queues are unchanged. *)
 Definition step (p src : ProcessId) (s s' : GlobalState) : Prop :=
   (src <> p /\ src < n /\ p < n) /\
   match network s src p with
@@ -120,7 +120,7 @@ Inductive Reachable : GlobalState -> Prop :=
       Reachable s -> step p src s s' -> Reachable s'.
 
 (* ================================================================
-   Adopt-Commit Safety Properties
+   Adopt-Commit Safety Properties + Recoverability
    ================================================================ *)
 
 (** Validity: every output has been proposed by someone (thus it must be the ID of some proposer). *)
@@ -152,12 +152,10 @@ Definition Convergence : Prop :=
     output_of s q = Some o ->
     o = Commit p.
 
-(** Recoverability: any n-f surviving processes hold enough evidence to rule out
-    any committed value other than the actual one.
+(** Recoverability: if one process commited, any n-f surviving processes
+    hold enough evidence to rule out any other value from having commited.
     Formally, no two reachable states that agree on (at least) n-f process
-    local states can commit different values.
-    The surviving set is represented as a duplicate-free list so that its
-    cardinality is given directly by [List.length]. *)
+    local states can commit different values. *)
 Definition Recoverability : Prop :=
   forall s s' alive v w,
     Reachable s -> Reachable s' ->

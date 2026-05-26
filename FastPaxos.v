@@ -1,16 +1,15 @@
-(** * FastPaxos Fast-Path Adopt-Commit
+(** * Adopt-Commit emulating FastPaxos's Fast-Path 
     This file instantiates the abstract adopt-commit framework from
     AdoptCommit.v with the fast path of FastPaxos (Lamport, 2006).
 
     Fast path overview:
-    - Each proposer p broadcasts Proposal(p, p) to all other processes.
+    - Each proposer p broadcasts it's proposal to all other processes.
       This broadcast is part of the initial state rather than a step, since our
       step model only covers message delivery. A proposer also pre-accepts its
       own value (with itself as the sole acceptor).
-    - When a process receives Proposal(sender, proposer) and has not yet
-      accepted any value, it accepts proposer's value and replies to proposer
-      with Proposal(self, proposer).
-    - When a process has already accepted value v and receives Proposal(sender, v),
+    - When a process receives a proposal and has not yet accepted any value,
+      it accepts proposer's value and replies to the proposer.
+    - When a process has already accepted value v and receives an acceptance,
       it records sender as a new acceptor of v and commits once fp_quorum
       acceptors have been collected (counting itself).
     - Messages about a proposer other than the one already accepted are ignored. *)
@@ -24,16 +23,16 @@ Require Import AdoptCommit.
    Messages and Local State
    ================================================================ *)
 
-(* Messages can encode either a proposer's request to accept, 
-   or the confirmation that a process accepted. *)
+(* Messages encode both a proposer's request to accept and
+  the confirmation that a process accepted. *)
 Record FPMsg := mkFPMsg {
   source   : ProcessId; (* sender of the message *)
-  proposer : ProcessId; (* Value the source accepted. *)
+  proposer : ProcessId; (* Value (=proposer) the source accepted. *)
 }.
 
 Record FPState := mkFPState {
-  fp_accepted  : option ProcessId;   (* proposer whose value we have accepted *)
-  fp_acceptors : list ProcessId;     (* processes that acknowledged our accepted value back to us *)
+  fp_accepted  : option ProcessId;   (* Value (=proposer) that p accepted *)
+  fp_acceptors : list ProcessId;     (* processes that acknowledged accepting the above *)
   fp_output    : option ACOutput;
 }.
 
@@ -52,19 +51,26 @@ Variable is_proposer : ProcessId -> Prop.
 Hypothesis exists_proposer : exists p, p < n /\ is_proposer p.
 
 (** Quorum size: If n=2f+1, the quorum size if floor(3n/4)+1.
-    We need to make sure that if f processes fail, the remainder
-    of the quorum is still a strict majority: (n-f)/2 + 1 *)
+    In Fast-Paxos, we need to make sure that if f processes fail,
+    the remainder of the quorum is still a strict majority:
+    (n-f)/2 + 1 *)
 Definition fp_quorum : nat := f + (n - f) / 2 + 1.
 
 (** Local transition function.
-    When process p receives Proposal(sender, proposer):
+    When process p receives a message (sender, proposer):
     - If already decided, the message is ignored.
-    - If p has not accepted any value yet, p accepts proposer's value and
-      replies Proposal(p, proposer) to proposer.
+    - If p has not accepted any value yet, p accepts the value and
+      acknowledge the acceptance to proposer.
     - If p already accepted value v:
+<<<<<<< HEAD
         - proposer = v: record sender as a new acceptor; commit if fp_quorum
           acceptors have been collected.
         - proposer != v: ignore. *)
+=======
+        - if the message is also about v: record sender as a new acceptor;
+          commit if fp_quorum acceptors have been collected.
+        - if the message is not about v, ignore. *)
+>>>>>>> 4b09906 (Code cleanup, readme update)
 Definition fp_step_fn
     (p : ProcessId) (ls : FPState) (m : FPMsg)
     : FPState * (ProcessId -> list FPMsg) :=
@@ -94,10 +100,14 @@ Definition fp_step_fn
 (** Initial state predicate.
     - All processes start undecided.
     - Each proposer p has accepted its own value and lists itself as the
+<<<<<<< HEAD
       sole acceptor (a proposer cannot receive its own broadcast, since
       our step relation requires src != p).
+=======
+      sole acceptor.
+>>>>>>> 4b09906 (Code cleanup, readme update)
     - Non-proposers start with no accepted value and no acceptors.
-    - Each proposer p has queued Proposal(p, p) to every other process q.
+    - Each proposer has broadcasted it's proposal to everyone.
     - Non-proposers have no outgoing messages. *)
 Definition fp_init (s : GlobalState FPMsg FPState) : Prop :=
   ((forall p,
@@ -131,8 +141,8 @@ Definition FP_Reachable   := Reachable n fp_instance.
    Proofs
    ================================================================ *)
 
-(** fp_step_fn never discards an existing output. *)
-Lemma fp_output_stable :
+(** processes never discards an existing output. *)
+Lemma output_stable :
   forall p ls m o,
     fp_output ls = Some o ->
     fp_output (fst (fp_step_fn p ls m)) = Some o.
@@ -210,17 +220,21 @@ Lemma all_accepted_values_valid :
       end).
 Proof.
   intros s Hs p p_valid. induction Hs; simpl in H.
-  - unfold fp_init in H; destruct H as [[_ [[prop_acc nonprop_acc] _]] _].
+  - (* init case *)
+    unfold fp_init in H; destruct H as [[_ [[prop_acc nonprop_acc] _]] _].
     destruct (classic (is_proposer p)) as [prop | not_prop].
     + rewrite (prop_acc p p_valid prop). auto.
     + rewrite (nonprop_acc p p_valid not_prop). auto.
-  - unfold step, fp_instance in H; simpl in H.
+  - (* step case *)
+    unfold step, fp_instance in H; simpl in H.
     destruct H as [[p_not_src [src_valid p0_valid]] H]. destruct (network s src p0) eqn:src_net.
-    + unfold state_eq in H. destruct H as [local_eq _].
+    + (* no message from src: no-op *)
+      unfold state_eq in H. destruct H as [local_eq _].
       rewrite local_eq. exact IHHs.
     + destruct H as [[p0_state other_state] _].
       destruct (classic (p = p0)).
-      * destruct H. rewrite p0_state.
+      * (* state of the stepping process *)
+        destruct H. rewrite p0_state.
         unfold fp_step_fn.
         destruct (fp_output (local s p)); auto.
         destruct (fp_accepted (local s p)) eqn:prev_acc.
@@ -238,7 +252,7 @@ Proof.
         exact IHHs.
 Qed.
 
-Lemma all_outputs_valid :
+Lemma all_output_values_valid :
   forall s,
     FP_Reachable s ->
     forall p, p < n ->
@@ -265,21 +279,21 @@ Proof.
         destruct H. rewrite p0_state.
         destruct (fp_output (local s p)) as [o|] eqn:prev_out.
         -- (* Output already set: fp_step_fn leaves local state unchanged. *)
-           rewrite (fp_output_stable p (local s p) f0 o prev_out).
-           exact IHHs.
+          rewrite (output_stable p (local s p) f0 o prev_out).
+          exact IHHs.
         -- (* No output yet: inspect accepted value. *)
-           unfold fp_step_fn. rewrite prev_out.
-           destruct (fp_accepted (local s p)) as [v|] eqn:prev_acc.
-           ++ destruct (Nat.eqb (proposer f0) v).
-              ** (* Accepted value matches: might commit. *)
-                 simpl.
-                 pose proof (all_accepted_values_valid s Hs p p_valid) as Hacc.
-                 rewrite prev_acc in Hacc.
-                 destruct (fp_quorum <=? _); auto.
-              ** (* Accepted value does not match: state unchanged. *)
-                 simpl. rewrite prev_out. auto.
-           ++ (* Not yet accepted: will accept proposer f0, output stays None. *)
-              simpl. auto.
+          unfold fp_step_fn. rewrite prev_out.
+          destruct (fp_accepted (local s p)) as [v|] eqn:prev_acc.
+          ++ destruct (Nat.eqb (proposer f0) v).
+            ** (* Accepted value matches: might commit. *)
+              simpl.
+              pose proof (all_accepted_values_valid s Hs p p_valid) as Hacc.
+              rewrite prev_acc in Hacc.
+              destruct (fp_quorum <=? _); auto.
+            ** (* Accepted value does not match: state unchanged. *)
+              simpl. rewrite prev_out. auto.
+          ++ (* Not yet accepted: will accept proposer f0, output stays None. *)
+            simpl. auto.
       * (* p != p0: p's local state is unchanged. *)
         rewrite (other_state p H).
         exact IHHs.
@@ -289,12 +303,12 @@ Theorem FastPaxos_Validity        : Validity n fp_instance.
 Proof.
   unfold Validity, fp_instance, output_of, valid_pid; simpl.
   intros s p v Hs p_valid [Hout | Hout];
-    pose proof (all_outputs_valid s Hs p p_valid) as Hvalid;
+    pose proof (all_output_values_valid s Hs p p_valid) as Hvalid;
     rewrite Hout in Hvalid; exact Hvalid.
 Qed.
 
 (** fp_step_fn never changes an already-accepted value. *)
-Lemma fp_accepted_stable :
+Lemma accepted_stable :
   forall p ls m v,
     fp_accepted ls = Some v ->
     fp_accepted (fst (fp_step_fn p ls m)) = Some v.
@@ -307,7 +321,7 @@ Proof.
 Qed.
 
 (** The source of every message has accepted the value. *)
-Lemma message_inv :
+Lemma msg_src_has_accepted :
   forall s,
     FP_Reachable s ->
     forall src dest,
@@ -365,7 +379,7 @@ Proof.
               2: exact (IHHs p dest p_valid dest_valid).
               intros msg [Hsrcmsg Hacc]. split; [exact Hsrcmsg |].
               rewrite p0_state.
-              exact (fp_accepted_stable p (local s p) f0 (proposer msg) Hacc).
+              exact (accepted_stable p (local s p) f0 (proposer msg) Hacc).
            ++ (* New messages. *)
               unfold fp_step_fn.
               destruct (fp_output (local s p)) as [o|] eqn:Hout; [simpl; constructor |].
@@ -385,7 +399,7 @@ Proof.
            rewrite (other_state src0 Hsp). exact Hacc.
 Qed.
 
-Lemma fp_acceptors_nodup :
+Lemma nodup_in_acceptors :
   forall s,
     FP_Reachable s ->
     forall p, p < n -> NoDup (fp_acceptors (local s p)).
@@ -434,7 +448,7 @@ Proof.
 Qed.
 
 (** Every process in p's acceptor list has also accepted p's value. *)
-Lemma acceptors_accepted_inv :
+Lemma all_acceptors_have_accepted :
   forall s,
     FP_Reachable s ->
     forall p v, p < n ->
@@ -458,7 +472,7 @@ Proof.
       rewrite (local_eq p) in Hacc, Hr. rewrite (local_eq r).
       exact (IHHs v p_valid Hacc r Hr).
     + destruct H as [[p0_state other_state] _].
-      pose proof (message_inv s Hs src p0 src_valid p0_valid) as Hmsg.
+      pose proof (msg_src_has_accepted s Hs src p0 src_valid p0_valid) as Hmsg.
       rewrite src_net in Hmsg. apply Forall_inv in Hmsg.
       destruct Hmsg as [Hsrc_f0 Hacc_src].
       intros v p_valid Hacc r Hr.
@@ -471,46 +485,46 @@ Proof.
            pose proof (IHHs v p_valid Hacc r Hr) as Hrfp.
            destruct (classic (r = p)) as [Hrp | Hrp].
            ++ subst r. rewrite p0_state.
-              exact (fp_accepted_stable p (local s p) f0 v Hrfp).
+              exact (accepted_stable p (local s p) f0 v Hrfp).
            ++ rewrite (other_state r Hrp). exact Hrfp.
         -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
-           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
-              ** apply Nat.eqb_eq in Hprop.
-                 simpl in Hacc. injection Hacc as Hwv. subst v.
-                 simpl in Hr.
-                 destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
-                 { simpl in Hr.
-                   pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
-                   destruct (classic (r = p)) as [Hrp | Hrp].
-                   - subst r. rewrite p0_state.
-                     exact (fp_accepted_stable p (local s p) f0 w Hrfp).
-                   - rewrite (other_state r Hrp). exact Hrfp. }
-                 { simpl in Hr. destruct Hr as [Heq | Hr_old].
-                   - rewrite <- Heq. rewrite Hsrc_f0.
-                     rewrite (other_state src p_not_src). congruence.
-                   - pose proof (IHHs w p_valid eq_refl r Hr_old) as Hrfp.
-                     destruct (classic (r = p)) as [Hrp | Hrp].
-                     + subst r. rewrite p0_state.
-                       exact (fp_accepted_stable p (local s p) f0 w Hrfp).
-                     + rewrite (other_state r Hrp). exact Hrfp. }
-              ** simpl in Hacc, Hr.
-                 assert (Hvw : w = v) by congruence.
-                 subst v.
-                 pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
-                 destruct (classic (r = p)) as [Hrp | Hrp].
-                 { subst r. rewrite p0_state.
-                   exact (fp_accepted_stable p (local s p) f0 w Hrfp). }
-                 { rewrite (other_state r Hrp). exact Hrfp. }
-           ++ simpl in Hr. destruct Hr.
+          ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+            ** apply Nat.eqb_eq in Hprop.
+              simpl in Hacc. injection Hacc as Hwv. subst v.
+              simpl in Hr.
+              destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
+              { simpl in Hr.
+                pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
+                destruct (classic (r = p)) as [Hrp | Hrp].
+                - subst r. rewrite p0_state.
+                  exact (accepted_stable p (local s p) f0 w Hrfp).
+                - rewrite (other_state r Hrp). exact Hrfp. }
+              { simpl in Hr. destruct Hr as [Heq | Hr_old].
+                - rewrite <- Heq. rewrite Hsrc_f0.
+                  rewrite (other_state src p_not_src). congruence.
+                - pose proof (IHHs w p_valid eq_refl r Hr_old) as Hrfp.
+                  destruct (classic (r = p)) as [Hrp | Hrp].
+                  + subst r. rewrite p0_state.
+                    exact (accepted_stable p (local s p) f0 w Hrfp).
+                  + rewrite (other_state r Hrp). exact Hrfp. }
+            ** simpl in Hacc, Hr.
+              assert (Hvw : w = v) by congruence.
+              subst v.
+              pose proof (IHHs w p_valid eq_refl r Hr) as Hrfp.
+              destruct (classic (r = p)) as [Hrp | Hrp].
+              { subst r. rewrite p0_state.
+                exact (accepted_stable p (local s p) f0 w Hrfp). }
+              { rewrite (other_state r Hrp). exact Hrfp. }
+          ++ simpl in Hr. destruct Hr.
       * rewrite (other_state p Hpp0) in Hacc, Hr.
         pose proof (IHHs v p_valid Hacc r Hr) as Hrfp.
         destruct (classic (r = p0)) as [Hrp0 | Hrp0].
         -- subst r. rewrite p0_state.
-           exact (fp_accepted_stable p0 (local s p0) f0 v Hrfp).
+          exact (accepted_stable p0 (local s p0) f0 v Hrfp).
         -- rewrite (other_state r Hrp0). exact Hrfp.
 Qed.
 
-Lemma commit_accepted :
+Lemma commit_implies_accepted :
   forall s, FP_Reachable s ->
   forall p v, p < n ->
     fp_output (local s p) = Some (Commit v) ->
@@ -532,26 +546,26 @@ Proof.
         unfold fp_step_fn in Hout.
         destruct (fp_output (local s p)) as [o|] eqn:Hprev_out.
         -- simpl in Hout.
-           assert (Ho : Some o = Some (Commit v)) by congruence.
-           rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
-           exact (IHHs v p_valid Ho).
+          assert (Ho : Some o = Some (Commit v)) by congruence.
+          rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
+          exact (IHHs v p_valid Ho).
         -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
-           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
-              ** apply Nat.eqb_eq in Hprop. subst w.
-                 simpl in Hout.
-                 destruct (fp_quorum <=? length _) eqn:Hle.
-                 { injection Hout as Hveq. subst v.
-                   rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
-                   rewrite Nat.eqb_refl. simpl. reflexivity. }
-                 { discriminate. }
-              ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
-           ++ simpl in Hout. discriminate.
+          ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+            ** apply Nat.eqb_eq in Hprop. subst w.
+              simpl in Hout.
+              destruct (fp_quorum <=? length _) eqn:Hle.
+              { injection Hout as Hveq. subst v.
+                rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
+                rewrite Nat.eqb_refl. simpl. reflexivity. }
+              { discriminate. }
+            ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
+          ++ simpl in Hout. discriminate.
       * rewrite (other_state p Hpp0) in Hout.
         rewrite (other_state p Hpp0).
         exact (IHHs v p_valid Hout).
 Qed.
 
-Lemma commit_quorum :
+Lemma commit_implies_quorum :
   forall s, FP_Reachable s ->
   forall p v, p < n ->
     fp_output (local s p) = Some (Commit v) ->
@@ -573,26 +587,26 @@ Proof.
         unfold fp_step_fn in Hout.
         destruct (fp_output (local s p)) as [o|] eqn:Hprev_out.
         -- simpl in Hout.
-           assert (Ho : Some o = Some (Commit v)) by congruence.
-           rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
-           exact (IHHs v p_valid Ho).
+          assert (Ho : Some o = Some (Commit v)) by congruence.
+          rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. simpl.
+          exact (IHHs v p_valid Ho).
         -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
-           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
-              ** apply Nat.eqb_eq in Hprop. subst w.
-                 simpl in Hout.
-                 destruct (fp_quorum <=? length _) eqn:Hle.
-                 { rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
-                   rewrite Nat.eqb_refl. simpl.
-                   apply Nat.leb_le. exact Hle. }
-                 { discriminate. }
-              ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
-           ++ simpl in Hout. discriminate.
+          ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+            ** apply Nat.eqb_eq in Hprop. subst w.
+              simpl in Hout.
+              destruct (fp_quorum <=? length _) eqn:Hle.
+              { rewrite p0_state. unfold fp_step_fn. rewrite Hprev_out. rewrite Hacc_p.
+                rewrite Nat.eqb_refl. simpl.
+                apply Nat.leb_le. exact Hle. }
+              { discriminate. }
+            ** simpl in Hout. rewrite Hprev_out in Hout. discriminate.
+          ++ simpl in Hout. discriminate.
       * rewrite (other_state p Hpp0) in Hout.
         rewrite (other_state p Hpp0).
         exact (IHHs v p_valid Hout).
 Qed.
 
-Lemma acceptors_valid :
+Lemma all_acceptors_are_valid :
   forall s, FP_Reachable s ->
   forall p, p < n ->
   forall r, In r (fp_acceptors (local s p)) -> r < n.
@@ -612,7 +626,7 @@ Proof.
       intros p_valid r Hr. rewrite (local_eq p) in Hr.
       exact (IHHs p_valid r Hr).
     + destruct H as [[p0_state other_state] _].
-      pose proof (message_inv s Hs src p0 src_valid p0_valid) as Hmsg.
+      pose proof (msg_src_has_accepted s Hs src p0 src_valid p0_valid) as Hmsg.
       rewrite src_net in Hmsg. apply Forall_inv in Hmsg.
       destruct Hmsg as [Hsrc_f0 _].
       intros p_valid r Hr.
@@ -621,15 +635,15 @@ Proof.
         destruct (fp_output (local s p)).
         -- simpl in Hr. exact (IHHs p_valid r Hr).
         -- destruct (fp_accepted (local s p)) as [w|] eqn:Hacc_p.
-           ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
-              ** simpl in Hr.
-                 destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
-                 { simpl in Hr. exact (IHHs p_valid r Hr). }
-                 { simpl in Hr. destruct Hr as [Heq | Hr_old].
-                   - subst r. rewrite Hsrc_f0. exact src_valid.
-                   - exact (IHHs p_valid r Hr_old). }
-              ** simpl in Hr. exact (IHHs p_valid r Hr).
-           ++ simpl in Hr. destruct Hr.
+          ++ destruct (Nat.eqb (proposer f0) w) eqn:Hprop.
+            ** simpl in Hr.
+              destruct (existsb (Nat.eqb (source f0)) (fp_acceptors (local s p))) eqn:Hexists.
+              { simpl in Hr. exact (IHHs p_valid r Hr). }
+              { simpl in Hr. destruct Hr as [Heq | Hr_old].
+                - subst r. rewrite Hsrc_f0. exact src_valid.
+                - exact (IHHs p_valid r Hr_old). }
+            ** simpl in Hr. exact (IHHs p_valid r Hr).
+          ++ simpl in Hr. destruct Hr.
       * rewrite (other_state p Hpp0) in Hr.
         exact (IHHs p_valid r Hr).
 Qed.
@@ -666,7 +680,7 @@ Proof.
   lia.
 Qed.
 
-Lemma fp_no_adopt :
+Lemma no_adopt :
   forall s, FP_Reachable s ->
   forall q w, q < n ->
     fp_output (local s q) <> Some (Adopt w).
@@ -686,10 +700,10 @@ Proof.
         destruct (fp_output (local s q)) as [o|] eqn:Hprev.
         -- simpl in Hq. exact (IHHs w q_valid (eq_trans (eq_sym Hprev) Hq)).
         -- destruct (fp_accepted (local s q)).
-           ++ destruct (Nat.eqb _ _).
-              ** simpl in Hq. destruct (fp_quorum <=? _); discriminate.
-              ** simpl in Hq. exact (IHHs w q_valid (eq_trans (eq_sym Hprev) Hq)).
-           ++ simpl in Hq. discriminate.
+          ++ destruct (Nat.eqb _ _).
+            ** simpl in Hq. destruct (fp_quorum <=? _); discriminate.
+            ** simpl in Hq. exact (IHHs w q_valid (eq_trans (eq_sym Hprev) Hq)).
+          ++ simpl in Hq. discriminate.
       * rewrite (other_state q Hqp) in Hq. exact (IHHs w q_valid Hq).
 Qed.
 
@@ -698,33 +712,33 @@ Proof.
   unfold Agreement, fp_instance, output_of, valid_pid, acp_proc_output; simpl.
   intros s p q v w Hs p_valid q_valid Hp Hq.
   destruct Hq as [Hq | Hq].
-  - pose proof (commit_accepted s Hs p v p_valid Hp) as Hacc_p.
-    pose proof (commit_quorum s Hs p v p_valid Hp) as Hquorum_p.
-    pose proof (commit_accepted s Hs q w q_valid Hq) as Hacc_q.
-    pose proof (commit_quorum s Hs q w q_valid Hq) as Hquorum_q.
-    pose proof (fp_acceptors_nodup s Hs p p_valid) as Hnd_p.
-    pose proof (fp_acceptors_nodup s Hs q q_valid) as Hnd_q.
-    pose proof (fun r Hr => acceptors_valid s Hs p p_valid r Hr) as Hval_p.
-    pose proof (fun r Hr => acceptors_valid s Hs q q_valid r Hr) as Hval_q.
+  - pose proof (commit_implies_accepted s Hs p v p_valid Hp) as Hacc_p.
+    pose proof (commit_implies_quorum s Hs p v p_valid Hp) as Hquorum_p.
+    pose proof (commit_implies_accepted s Hs q w q_valid Hq) as Hacc_q.
+    pose proof (commit_implies_quorum s Hs q w q_valid Hq) as Hquorum_q.
+    pose proof (nodup_in_acceptors s Hs p p_valid) as Hnd_p.
+    pose proof (nodup_in_acceptors s Hs q q_valid) as Hnd_q.
+    pose proof (fun r Hr => all_acceptors_are_valid s Hs p p_valid r Hr) as Hval_p.
+    pose proof (fun r Hr => all_acceptors_are_valid s Hs q q_valid r Hr) as Hval_q.
     destruct (quorum_intersection
                 (fp_acceptors (local s p)) (fp_acceptors (local s q))
                 Hnd_p Hval_p Hnd_q Hval_q Hquorum_p Hquorum_q)
       as [r [HrA HrB]].
-    pose proof (acceptors_accepted_inv s Hs p v p_valid Hacc_p r HrA) as Hrv.
-    pose proof (acceptors_accepted_inv s Hs q w q_valid Hacc_q r HrB) as Hrw.
+    pose proof (all_acceptors_have_accepted s Hs p v p_valid Hacc_p r HrA) as Hrv.
+    pose proof (all_acceptors_have_accepted s Hs q w q_valid Hacc_q r HrB) as Hrw.
     congruence.
-  - destruct (fp_no_adopt s Hs q w q_valid Hq).
+  - destruct (no_adopt s Hs q w q_valid Hq).
 Qed.
 
 Theorem FastPaxos_Convergence     : Convergence n fp_instance.
 Proof.
   unfold Convergence, fp_instance, output_of, valid_pid, acp_proc_output, acp_is_proposer; simpl.
   intros s p q o Hs p_valid q_valid Hprop Huniq Hout.
-  pose proof (all_outputs_valid s Hs q q_valid) as Hvalid.
+  pose proof (all_output_values_valid s Hs q q_valid) as Hvalid.
   rewrite Hout in Hvalid.
   destruct o as [v | v].
   - f_equal. exact (Huniq v Hvalid).
-  - destruct (fp_no_adopt s Hs q v q_valid Hout).
+  - destruct (no_adopt s Hs q v q_valid Hout).
 Qed.
 
 (** Any committed process has a valid PID (< n). *)
@@ -810,16 +824,16 @@ Proof.
   intros s s' alive v w Hs Hs' Hnd_alive Hlen_alive Hval_alive Hlocal_eq [p Hp] [q Hq].
   pose proof (fp_commit_pid_valid s Hs p v Hp) as p_valid.
   pose proof (fp_commit_pid_valid s' Hs' q w Hq) as q_valid.
-  pose proof (commit_accepted s Hs p v p_valid Hp) as Hacc_p.
-  pose proof (commit_quorum s Hs p v p_valid Hp) as Hquorum_p.
-  pose proof (fp_acceptors_nodup s Hs p p_valid) as Hnd_Ap.
-  pose proof (fun r Hr => acceptors_valid s Hs p p_valid r Hr) as Hval_Ap.
-  pose proof (fun r Hr => acceptors_accepted_inv s Hs p v p_valid Hacc_p r Hr) as Hacc_Ap.
-  pose proof (commit_accepted s' Hs' q w q_valid Hq) as Hacc_q.
-  pose proof (commit_quorum s' Hs' q w q_valid Hq) as Hquorum_q.
-  pose proof (fp_acceptors_nodup s' Hs' q q_valid) as Hnd_Aq.
-  pose proof (fun r Hr => acceptors_valid s' Hs' q q_valid r Hr) as Hval_Aq.
-  pose proof (fun r Hr => acceptors_accepted_inv s' Hs' q w q_valid Hacc_q r Hr) as Hacc_Aq.
+  pose proof (commit_implies_accepted s Hs p v p_valid Hp) as Hacc_p.
+  pose proof (commit_implies_quorum s Hs p v p_valid Hp) as Hquorum_p.
+  pose proof (nodup_in_acceptors s Hs p p_valid) as Hnd_Ap.
+  pose proof (fun r Hr => all_acceptors_are_valid s Hs p p_valid r Hr) as Hval_Ap.
+  pose proof (fun r Hr => all_acceptors_have_accepted s Hs p v p_valid Hacc_p r Hr) as Hacc_Ap.
+  pose proof (commit_implies_accepted s' Hs' q w q_valid Hq) as Hacc_q.
+  pose proof (commit_implies_quorum s' Hs' q w q_valid Hq) as Hquorum_q.
+  pose proof (nodup_in_acceptors s' Hs' q q_valid) as Hnd_Aq.
+  pose proof (fun r Hr => all_acceptors_are_valid s' Hs' q q_valid r Hr) as Hval_Aq.
+  pose proof (fun r Hr => all_acceptors_have_accepted s' Hs' q w q_valid Hacc_q r Hr) as Hacc_Aq.
   (* B = alive processes that are in q's acceptor list in s' *)
   set (B := filter (fun r => existsb (Nat.eqb r) alive) (fp_acceptors (local s' q))).
   assert (Hnd_B : NoDup B) by (apply NoDup_filter; exact Hnd_Aq).
